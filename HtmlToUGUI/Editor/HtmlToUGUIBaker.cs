@@ -30,7 +30,23 @@ namespace Editor.UIBaker
 
     public class HtmlToUGUIBaker : EditorWindow
     {
+        // 定义输入模式状态机，用于在 GUI 中切换不同的数据源获取策略
+        private enum InputMode
+        {
+            FileAsset,
+            RawString
+        }
+
+        private InputMode currentMode = InputMode.FileAsset;
+
+        // 文件模式数据源
         private TextAsset jsonAsset;
+
+        // 字符串模式数据源与滚动视图状态
+        private string rawJsonString = "";
+        private Vector2 scrollPosition;
+
+        // 目标挂载节点
         private Canvas targetCanvas;
 
         private readonly Vector2 REFERENCE_RESOLUTION = new Vector2(1920, 1080);
@@ -46,55 +62,163 @@ namespace Editor.UIBaker
             GUILayout.Label("基于坐标烘焙的 UI 原型生成工具 (支持全控件与对齐)", EditorStyles.boldLabel);
             GUILayout.Space(10);
 
-            jsonAsset = (TextAsset)EditorGUILayout.ObjectField("JSON 数据源", jsonAsset, typeof(TextAsset), false);
+            // 目标 Canvas 是两种模式共用的核心参数，优先展示
             targetCanvas = (Canvas)EditorGUILayout.ObjectField("目标 Canvas", targetCanvas, typeof(Canvas), true);
+            GUILayout.Space(10);
+
+            // 渲染顶部模式切换页签
+            currentMode = (InputMode)GUILayout.Toolbar((int)currentMode, new string[] { "读取 JSON 文件", "直接粘贴 JSON 字符" });
+            GUILayout.Space(10);
+
+            // 根据当前模式渲染对应的输入区域
+            if (currentMode == InputMode.FileAsset)
+            {
+                DrawFileModeUI();
+            }
+            else
+            {
+                DrawStringModeUI();
+            }
 
             GUILayout.Space(20);
 
+            // 核心执行按钮，采用高亮大按钮设计以防误触
+            GUI.backgroundColor = new Color(0.2f, 0.8f, 0.2f);
             if (GUILayout.Button("执行烘焙生成", GUILayout.Height(40)))
             {
                 ExecuteBake();
             }
+
+            GUI.backgroundColor = Color.white;
         }
 
-        private void ExecuteBake()
+        /// <summary>
+        /// 渲染文件读取模式的专属 UI
+        /// </summary>
+        private void DrawFileModeUI()
         {
-            if (jsonAsset == null)
+            jsonAsset = (TextAsset)EditorGUILayout.ObjectField("JSON 数据源", jsonAsset, typeof(TextAsset), false);
+            EditorGUILayout.HelpBox("请将工程目录下的 .json 文件拖拽至此。", MessageType.Info);
+        }
+
+        /// <summary>
+        /// 渲染字符串直贴模式的专属 UI，并提供资产固化功能
+        /// </summary>
+        private void DrawStringModeUI()
+        {
+            GUILayout.Label("在此粘贴 JSON 文本:", EditorStyles.label);
+
+            scrollPosition = GUILayout.BeginScrollView(scrollPosition, GUILayout.Height(200));
+            rawJsonString = EditorGUILayout.TextArea(rawJsonString, GUILayout.ExpandHeight(true));
+            GUILayout.EndScrollView();
+
+            GUILayout.Space(5);
+
+            // 提供将内存中的临时字符串固化为工程资产的快捷入口
+            if (GUILayout.Button("将当前 JSON 保存为文件到工程目录..."))
             {
-                Debug.LogError("[HtmlToUGUIBaker] 烘焙中断: 未指定 JSON 数据源。");
+                SaveRawJsonToProject();
+            }
+        }
+
+        /// <summary>
+        /// 将内存中的 JSON 字符串通过底层 I/O 写入到 Assets 目录下
+        /// </summary>
+        private void SaveRawJsonToProject()
+        {
+            // 前置拦截：防止保存空数据
+            if (string.IsNullOrWhiteSpace(rawJsonString))
+            {
+                Debug.LogError("[HtmlToUGUIBaker] 保存失败: 当前 JSON 字符串为空，请先粘贴数据。");
                 return;
             }
 
+            // 唤起 Unity 标准的工程内保存弹窗，限制只能保存在 Assets 目录下
+            string savePath = EditorUtility.SaveFilePanelInProject(
+                "保存 JSON 数据",
+                "NewUIWindow.json",
+                "json",
+                "请选择要保存的目录"
+            );
+
+            // 用户取消了保存操作
+            if (string.IsNullOrEmpty(savePath)) return;
+
+            // 涉及底层不可控的文件 I/O 操作，必须使用 try-catch 捕获权限或磁盘异常
+            try
+            {
+                File.WriteAllText(savePath, rawJsonString);
+                AssetDatabase.Refresh();
+
+                // 自动将保存后的文件加载并赋值给文件模式的引用，提升工作流连贯性
+                TextAsset savedAsset = AssetDatabase.LoadAssetAtPath<TextAsset>(savePath);
+                if (savedAsset != null)
+                {
+                    jsonAsset = savedAsset;
+                    currentMode = InputMode.FileAsset;
+                    Debug.Log($"[HtmlToUGUIBaker] JSON 文件已成功保存至: {savePath}，并已自动切换至文件模式。");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[HtmlToUGUIBaker] 文件写入失败: 路径 {savePath}，错误信息: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 核心烘焙逻辑调度器，负责数据源的统一解析与树状结构的构建
+        /// </summary>
+        private void ExecuteBake()
+        {
+            // 前置拦截：确保目标容器存在
             if (targetCanvas == null)
             {
-                Debug.LogError("[HtmlToUGUIBaker] 烘焙中断: 未指定目标 Canvas。");
+                Debug.LogError("[HtmlToUGUIBaker] 烘焙中断: 未指定目标 Canvas，无法确定 UI 挂载点。");
                 return;
+            }
+
+            string jsonContent = string.Empty;
+
+            // 根据当前模式获取对应的 JSON 数据文本
+            if (currentMode == InputMode.FileAsset)
+            {
+                if (jsonAsset == null)
+                {
+                    Debug.LogError("[HtmlToUGUIBaker] 烘焙中断: 文件模式下未指定 JSON 数据源。");
+                    return;
+                }
+
+                jsonContent = jsonAsset.text;
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(rawJsonString))
+                {
+                    Debug.LogError("[HtmlToUGUIBaker] 烘焙中断: 字符串模式下 JSON 内容为空。");
+                    return;
+                }
+
+                jsonContent = rawJsonString;
             }
 
             ConfigureCanvasScaler(targetCanvas);
 
-            string jsonContent = string.Empty;
-            try
+            // 解析 JSON 数据，若格式非法则 Unity 底层会抛出异常或返回 null
+            UIDataNode rootNode = JsonUtility.FromJson<UIDataNode>(jsonContent);
+            if (rootNode == null)
             {
-                jsonContent = File.ReadAllText(AssetDatabase.GetAssetPath(jsonAsset));
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"[HtmlToUGUIBaker] 文件读取失败: {e.Message}");
+                Debug.LogError("[HtmlToUGUIBaker] 烘焙中断: JSON 解析失败，请检查数据格式是否符合规范。");
                 return;
             }
 
-            if (string.IsNullOrEmpty(jsonContent)) return;
-
-            UIDataNode rootNode = JsonUtility.FromJson<UIDataNode>(jsonContent);
-            if (rootNode == null) return;
-
+            // 启动递归构建 UI 树
             GameObject rootGo = CreateUINode(rootNode, targetCanvas.transform, 0f, 0f);
 
+            // 注册 Undo 撤销操作，保证编辑器操作的安全性
             Undo.RegisterCreatedObjectUndo(rootGo, "Bake UI Prototype");
             Selection.activeGameObject = rootGo;
 
-            Debug.Log($"[HtmlToUGUIBaker] 烘焙完成: 成功生成 UI 树 {rootGo.name}，文本对齐与智能换行已应用。");
+            Debug.Log($"[HtmlToUGUIBaker] 烘焙完成: 成功生成 UI 树 [{rootGo.name}]，文本对齐与智能换行已应用。");
         }
 
         private void ConfigureCanvasScaler(Canvas canvas)
@@ -264,7 +388,7 @@ namespace Editor.UIBaker
                     tLblTxt.text = nodeData.text;
                     tLblTxt.color = fontColor;
                     tLblTxt.fontSize = fontSize;
-                    tLblTxt.alignment = TextAlignmentOptions.MidlineLeft; // 强制垂直居中靠左
+                    tLblTxt.alignment = TextAlignmentOptions.MidlineLeft;
                     tLblTxt.enableWordWrapping = false;
 
                     toggle.targetGraphic = tBgImg;
@@ -305,7 +429,7 @@ namespace Editor.UIBaker
                     TextMeshProUGUI dLblTxt = dLblGo.AddComponent<TextMeshProUGUI>();
                     dLblTxt.color = fontColor;
                     dLblTxt.fontSize = fontSize;
-                    dLblTxt.alignment = TextAlignmentOptions.MidlineLeft; // 强制垂直居中靠左
+                    dLblTxt.alignment = TextAlignmentOptions.MidlineLeft;
                     dLblTxt.enableWordWrapping = false;
 
                     GameObject arrowGo = CreateChildRect(go, "Arrow", new Vector2(1, 0.5f), new Vector2(1, 0.5f));
@@ -328,8 +452,9 @@ namespace Editor.UIBaker
                     templateGo.SetActive(false);
 
                     GameObject dViewportGo = CreateChildRect(templateGo, "Viewport", Vector2.zero, Vector2.one);
-                    dViewportGo.AddComponent<Mask>();
+                    // 修正：必须先挂载 Image，再挂载 Mask，防止底层抛出缺失 Graphic 的警告
                     dViewportGo.AddComponent<Image>().color = Color.white;
+                    dViewportGo.AddComponent<Mask>();
 
                     GameObject dContentGo = CreateChildRect(dViewportGo, "Content", new Vector2(0, 1), new Vector2(1, 1));
                     RectTransform dContentRect = dContentGo.GetComponent<RectTransform>();
@@ -386,9 +511,6 @@ namespace Editor.UIBaker
             }
         }
 
-        /// <summary>
-        /// 核心修正：使用 Midline 系列枚举，确保文本在垂直方向上绝对居中
-        /// </summary>
         private TextAlignmentOptions ParseTextAlign(string alignStr)
         {
             if (string.IsNullOrEmpty(alignStr)) return TextAlignmentOptions.Midline;
