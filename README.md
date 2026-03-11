@@ -52,5 +52,6 @@
 | `data-u-type="slider"`| Slider + Image | 默认进度值 (`data-u-value`) |
 | `data-u-type="dropdown"`| TMP_Dropdown + ScrollRect | 内部 `<option>` 选项列表解析 |
 
+演示视频https://www.bilibili.com/video/BV17BcXzwEer
 ![PixPin_2026-03-10_15-44-19](https://github.com/user-attachments/assets/ad14f70e-fe40-437b-8a0a-54b4764630c0)
 
