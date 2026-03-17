@@ -5,6 +5,7 @@
 演示视频：https://www.bilibili.com/video/BV17BcXzwEer
 
 ![PixPin_2026-03-17_11-08-43](https://github.com/user-attachments/assets/28385bc6-41b3-43f5-a539-b99d62097bec)
+<img width="806" height="587" alt="image" src="https://github.com/user-attachments/assets/63de9574-8395-4fc1-808e-00256d48cdf1" />
 
 ## 🚀 v2.0 全新特性 (最新更新)
 
