@@ -3,7 +3,8 @@
 这是一套将 AI 生成的 HTML 原型直接转换为 Unity UGUI 界面树的自动化生产管线。通过自定义的 HTML 数据属性规范（UI-DSL），结合 Web 坐标提取工具和 Unity 编辑器扩展，实现从“自然语言对话”到“生产级 UGUI 预制体”的无缝流转。
 
 演示视频：https://www.bilibili.com/video/BV17BcXzwEer
-![PixPin_2026-03-10_15-44-19](https://github.com/user-attachments/assets/ad14f70e-fe40-437b-8a0a-54b4764630c0)
+
+![PixPin_2026-03-17_11-08-43](https://github.com/user-attachments/assets/28385bc6-41b3-43f5-a539-b99d62097bec)
 
 ## 🚀 v2.0 全新特性 (最新更新)
 
