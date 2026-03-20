@@ -31,7 +31,25 @@
         #canvas-sandbox * { box-sizing: border-box !important; }
         #canvas-sandbox [data-u-type] { min-width: 0; min-height: 0; }
 
-        .json-output-container { flex: 4; display: flex; flex-direction: column; border-top: 1px solid #333; }
+        .binding-preview-container { flex: 2.2; display: flex; flex-direction: column; border-top: 1px solid #333; min-height: 160px; }
+        .binding-preview-summary { padding: 6px 15px; background-color: #232323; border-bottom: 1px solid #3e3e42; font-size: 12px; color: #c5e4ff; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+        .binding-preview-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .binding-preview-actions button { padding: 5px 10px; font-size: 12px; border-radius: 3px; }
+        .binding-preview-list { flex: 1; overflow: auto; background-color: #1c1c1c; }
+        .binding-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #2f2f2f; font-size: 12px; line-height: 1.45; }
+        .binding-row.ok { background-color: rgba(40, 167, 69, 0.08); }
+        .binding-row.warn { background-color: rgba(220, 53, 69, 0.08); }
+        .binding-row.selected { outline: 2px solid #9cdcfe; outline-offset: -2px; }
+        .binding-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; flex: 0 0 auto; }
+        .binding-dot.ok { background-color: #28a745; }
+        .binding-dot.warn { background-color: #dc3545; }
+        .binding-main { flex: 1; min-width: 0; }
+        .binding-title { color: #fff; font-weight: bold; margin-bottom: 2px; word-break: break-all; }
+        .binding-meta { color: #9cdcfe; word-break: break-all; }
+        .binding-path { color: #ce9178; word-break: break-all; margin-top: 2px; }
+        .binding-empty { padding: 12px 15px; color: #888; font-size: 12px; }
+
+        .json-output-container { flex: 3.2; display: flex; flex-direction: column; border-top: 1px solid #333; }
         #json-output { background-color: #252526; color: #ce9178; }
     </style>
 </head>
@@ -60,6 +78,19 @@
             <div id="canvas-sandbox"></div>
         </div>
 
+        <div class="binding-preview-container">
+            <div class="binding-preview-summary">
+                <span>图片绑定预览</span>
+                <div class="binding-preview-actions">
+                    <span id="binding-summary">Recognized: 0 / 0</span>
+                    <button id="btn-export-fix-list" onclick="exportRepairList()">导出待修复清单</button>
+                </div>
+            </div>
+            <div id="binding-preview-list" class="binding-preview-list">
+                <div class="binding-empty">预览后会自动列出识别到的图片节点，以及未绑定图片的节点。</div>
+            </div>
+        </div>
+
         <div class="json-output-container">
             <div class="panel-header">JSON 数据 (已自动复制到剪贴板)</div>
             <textarea id="json-output" readonly></textarea>
@@ -69,6 +100,8 @@
 
 <script>
     let currentScale = 1.0;
+    let selectedBindingIndex = -1;
+    let lastRepairList = null;
 
     function renderAndFit() {
         const code = document.getElementById('code-editor').value;
@@ -82,6 +115,7 @@
         }
 
         fitPreviewScale();
+        updateBindingPreview();
     }
 
     function fitPreviewScale() {
@@ -106,9 +140,218 @@
         document.getElementById('scale-info').innerText = `Scale: ${Math.round(currentScale * 100)}%`;
     }
 
+    function updateBindingPreview() {
+        const sandbox = document.getElementById('canvas-sandbox');
+        const list = document.getElementById('binding-preview-list');
+        const summary = document.getElementById('binding-summary');
+        if (!sandbox || !list || !summary) return;
+
+        const elements = Array.from(sandbox.querySelectorAll('*'));
+        const rows = [];
+        const repairItems = [];
+        let total = 0;
+        let recognized = 0;
+
+        elements.forEach((element, index) => {
+            const info = getBindingInfo(element, index);
+            if (!info) return;
+
+            total++;
+            if (info.hasBinding) recognized++;
+            if (!info.hasBinding) {
+                repairItems.push(buildRepairItem(info, element));
+            }
+
+            rows.push(`
+                <div class="binding-row ${info.hasBinding ? 'ok' : 'warn'} ${selectedBindingIndex === info.elementIndex ? 'selected' : ''}" data-binding-index="${info.elementIndex}">
+                    <div class="binding-dot ${info.hasBinding ? 'ok' : 'warn'}"></div>
+                    <div class="binding-main">
+                        <div class="binding-title">${escapeHtml(info.title)}</div>
+                        <div class="binding-meta">${escapeHtml(info.meta)}</div>
+                        <div class="binding-path">${escapeHtml(info.path || (info.hasBinding ? '已识别到图片资源' : '未发现可绑定的图片地址'))}</div>
+                    </div>
+                </div>
+            `);
+        });
+
+        summary.innerText = `Recognized: ${recognized} / ${total}`;
+        list.innerHTML = rows.length > 0
+            ? rows.join('')
+            : '<div class="binding-empty">当前没有检测到可预览的图片节点。</div>';
+
+        lastRepairList = {
+            generatedAt: new Date().toISOString(),
+            total: total,
+            recognized: recognized,
+            missingCount: repairItems.length,
+            items: repairItems
+        };
+
+        applyCurrentHighlight();
+    }
+
+    function getBindingInfo(element, index) {
+        const tag = element.tagName.toLowerCase();
+        const uType = element.getAttribute('data-u-type') || '';
+        const uName = element.getAttribute('data-u-name') || '';
+        const spriteInfo = extractSpriteInfo(element);
+        const hasBinding = !!(spriteInfo.spriteName || spriteInfo.spritePath);
+        const imageLike = tag === 'img' || hasBinding || isImageLikeElement(element) || uType === 'image';
+
+        if (!imageLike) {
+            return null;
+        }
+
+        const titleParts = [`${index + 1}. <${tag}>`];
+        if (uName) titleParts.push(`name=${uName}`);
+        if (uType) titleParts.push(`type=${uType}`);
+
+        const metaParts = [];
+        if (spriteInfo.spriteName) metaParts.push(`spriteName=${spriteInfo.spriteName}`);
+        if (spriteInfo.spritePath) metaParts.push(`spritePath=${spriteInfo.spritePath}`);
+        if (!spriteInfo.spriteName && !spriteInfo.spritePath) metaParts.push('未绑定图片地址');
+
+        return {
+            elementIndex: index,
+            title: titleParts.join(' | '),
+            meta: metaParts.join(' | '),
+            path: spriteInfo.spritePath,
+            hasBinding: hasBinding,
+            tag: tag,
+            uType: uType,
+            uName: uName,
+            spriteName: spriteInfo.spriteName,
+            spritePath: spriteInfo.spritePath
+        };
+    }
+
+    function buildRepairItem(info, element) {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return {
+            index: info.elementIndex,
+            tag: info.tag,
+            name: info.uName || info.spriteName || generateNodeNameFromElement(element, { spriteName: info.spriteName, spritePath: info.spritePath }),
+            type: info.uType || (info.tag === 'img' || isImageLikeElement(element) ? 'image' : 'div'),
+            spriteName: info.spriteName || "",
+            spritePath: info.spritePath || "",
+            x: Math.round(rect.left / currentScale),
+            y: Math.round(rect.top / currentScale),
+            width: Math.round(rect.width / currentScale),
+            height: Math.round(rect.height / currentScale),
+            text: (element.innerText || "").trim(),
+            backgroundColor: rgb2hex(style.backgroundColor),
+            fontColor: rgb2hex(style.color),
+            suggestion: info.spritePath ? "已绑定" : "补充 data-u-src / src / background-image"
+        };
+    }
+
+    function highlightBindingIndex(bindingIndex) {
+        const sandbox = document.getElementById('canvas-sandbox');
+        if (!sandbox) return;
+
+        const rows = document.querySelectorAll('.binding-row');
+        rows.forEach(row => row.classList.remove('selected'));
+
+        selectedBindingIndex = bindingIndex;
+
+        const row = document.querySelector(`.binding-row[data-binding-index="${bindingIndex}"]`);
+        if (row) {
+            row.classList.add('selected');
+            row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+
+        const element = sandbox.querySelectorAll('*')[bindingIndex];
+        if (element) {
+            clearElementHighlight(sandbox);
+            element.style.outline = '3px solid #9cdcfe';
+            element.style.outlineOffset = '-2px';
+            element.style.boxShadow = '0 0 0 2px rgba(156, 220, 254, 0.25)';
+            element.dataset.bindingHighlighted = 'true';
+            element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+    }
+
+    function clearElementHighlight(sandbox) {
+        const previous = sandbox.querySelectorAll('[data-binding-highlighted="true"]');
+        previous.forEach(el => {
+            el.style.outline = '';
+            el.style.outlineOffset = '';
+            el.style.boxShadow = '';
+            delete el.dataset.bindingHighlighted;
+        });
+    }
+
+    function exportRepairList() {
+        if (!lastRepairList) {
+            updateBindingPreview();
+        }
+
+        if (!lastRepairList || !lastRepairList.items) {
+            alert('当前没有可导出的修复清单。');
+            return;
+        }
+
+        const json = JSON.stringify(lastRepairList, null, 2);
+        const output = document.getElementById('json-output');
+        if (output) {
+            output.value = json;
+        }
+
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'ui-image-repair-list.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function applyCurrentHighlight() {
+        if (selectedBindingIndex < 0) {
+            return;
+        }
+
+        const sandbox = document.getElementById('canvas-sandbox');
+        if (!sandbox) return;
+
+        const element = sandbox.querySelectorAll('*')[selectedBindingIndex];
+        if (!element) {
+            return;
+        }
+
+        clearElementHighlight(sandbox);
+        element.style.outline = '3px solid #9cdcfe';
+        element.style.outlineOffset = '-2px';
+        element.style.boxShadow = '0 0 0 2px rgba(156, 220, 254, 0.25)';
+        element.dataset.bindingHighlighted = 'true';
+    }
+
+    document.addEventListener('click', function (event) {
+        const row = event.target.closest('.binding-row');
+        if (!row) {
+            return;
+        }
+
+        const indexText = row.getAttribute('data-binding-index');
+        if (indexText === null) {
+            return;
+        }
+
+        const index = parseInt(indexText, 10);
+        if (Number.isNaN(index)) {
+            return;
+        }
+
+        highlightBindingIndex(index);
+    });
+
     window.addEventListener('resize', () => {
         if (document.getElementById('canvas-sandbox').innerHTML.trim() !== "") {
             fitPreviewScale();
+            updateBindingPreview();
         }
     });
 
@@ -128,6 +371,7 @@
 
         const jsonOutput = document.getElementById('json-output');
         jsonOutput.value = JSON.stringify(uiData, null, 2);
+        updateBindingPreview();
 
         jsonOutput.select();
         document.execCommand('copy');
@@ -147,10 +391,12 @@
     function traverseAndBake(element, rootRect) {
         const uType = element.getAttribute('data-u-type');
         const uName = element.getAttribute('data-u-name');
+        const spriteInfo = extractSpriteInfo(element);
+        const inferredNode = inferNodeInfo(element, uType, uName, spriteInfo);
 
         let nodeData = null;
 
-        if (uType && uName) {
+        if (inferredNode.shouldBake) {
             const rect = element.getBoundingClientRect();
             const style = window.getComputedStyle(element);
 
@@ -173,6 +419,8 @@
             let uValue = parseFloat(element.getAttribute('data-u-value')) || 0.5;
             let uChecked = element.getAttribute('data-u-checked') === 'true';
             let uOptions = [];
+            let spriteName = spriteInfo.spriteName;
+            let spritePath = spriteInfo.spritePath;
 
             if (uType === 'dropdown' && element.tagName.toLowerCase() === 'select') {
                 const opts = element.querySelectorAll('option');
@@ -180,8 +428,8 @@
             }
 
             nodeData = {
-                name: uName,
-                type: uType,
+                name: inferredNode.name,
+                type: inferredNode.type,
                 dir: uDir,
                 value: uValue,
                 isChecked: uChecked,
@@ -195,6 +443,8 @@
                 fontSize: Math.round(fontSize),
                 textAlign: textAlign,
                 text: textContent.trim(),
+                spriteName: spriteName,
+                spritePath: spritePath,
                 children: []
             };
         }
@@ -223,6 +473,112 @@
         return null;
     }
 
+    function inferNodeInfo(element, uType, uName, spriteInfo) {
+        const tag = element.tagName.toLowerCase();
+        const hasSprite = !!(spriteInfo.spriteName || spriteInfo.spritePath);
+        const hasImageStyle = isImageLikeElement(element);
+
+        if (uType && uName) {
+            return {
+                shouldBake: true,
+                name: uName,
+                type: uType
+            };
+        }
+
+        if (tag === 'img' || hasSprite || hasImageStyle) {
+            const fallbackName = uName || spriteInfo.spriteName || generateNodeNameFromElement(element, spriteInfo);
+            return {
+                shouldBake: true,
+                name: fallbackName,
+                type: 'image'
+            };
+        }
+
+        return {
+            shouldBake: false,
+            name: '',
+            type: ''
+        };
+    }
+
+    function isImageLikeElement(element) {
+        const style = window.getComputedStyle(element);
+        const inlineStyle = (element.getAttribute('style') || '').toLowerCase();
+        const backgroundImage = (style.backgroundImage || '').toLowerCase();
+        const background = (style.background || '').toLowerCase();
+        return inlineStyle.includes('background-image') || inlineStyle.includes('background: url') || backgroundImage.includes('url(') || background.includes('url(');
+    }
+
+    function generateNodeNameFromElement(element, spriteInfo) {
+        const tag = element.tagName.toLowerCase();
+        if (spriteInfo.spriteName) {
+            return toCamelCase(spriteInfo.spriteName);
+        }
+
+        if (tag === 'img') {
+            return 'imageNode';
+        }
+
+        return 'imageNode';
+    }
+
+    function extractSpriteInfo(element) {
+        const style = window.getComputedStyle(element);
+        const directSrc = element.getAttribute('data-u-src') || element.getAttribute('data-u-sprite') || "";
+        if (directSrc) {
+            return {
+                spriteName: fileNameWithoutExtension(directSrc),
+                spritePath: directSrc
+            };
+        }
+
+        if (element.tagName.toLowerCase() === 'img') {
+            const imgSrc = element.getAttribute('src') || element.getAttribute('data-src') || "";
+            return {
+                spriteName: fileNameWithoutExtension(imgSrc),
+                spritePath: imgSrc
+            };
+        }
+
+        const backgroundImage = style.backgroundImage || "";
+        if (backgroundImage && backgroundImage !== 'none') {
+            const match = backgroundImage.match(/url\(["']?(.*?)["']?\)/i);
+            if (match && match[1]) {
+                return {
+                    spriteName: fileNameWithoutExtension(match[1]),
+                    spritePath: match[1]
+                };
+            }
+        }
+
+        return {
+            spriteName: "",
+            spritePath: ""
+        };
+    }
+
+    function toCamelCase(value) {
+        if (!value) return "";
+        const cleaned = value.replace(/[^a-zA-Z0-9]+/g, " ").trim();
+        if (!cleaned) return "";
+        const parts = cleaned.split(/\s+/);
+        const first = parts[0].charAt(0).toLowerCase() + parts[0].slice(1);
+        let result = first;
+        for (let i = 1; i < parts.length; i++) {
+            result += parts[i].charAt(0).toUpperCase() + parts[i].slice(1);
+        }
+        return result;
+    }
+
+    function fileNameWithoutExtension(path) {
+        if (!path) return "";
+        const clean = path.split('?')[0].split('#')[0].replace(/\\/g, '/');
+        const name = clean.substring(clean.lastIndexOf('/') + 1);
+        const dot = name.lastIndexOf('.');
+        return dot >= 0 ? name.substring(0, dot) : name;
+    }
+
     function rgb2hex(rgb) {
         if (!rgb || rgb === 'rgba(0, 0, 0, 0)' || rgb === 'transparent') return '#FFFFFF00';
         const match = rgb.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/);
@@ -232,6 +588,194 @@
         const b = ("0" + parseInt(match[3], 10).toString(16)).slice(-2);
         const a = match[4] ? ("0" + Math.round(parseFloat(match[4]) * 255).toString(16)).slice(-2) : "ff";
         return `#${r}${g}${b}${a === 'ff' ? '' : a}`;
+    }
+
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function updateBindingPreview() {
+        const sandbox = document.getElementById('canvas-sandbox');
+        const list = document.getElementById('binding-preview-list');
+        const summary = document.getElementById('binding-summary');
+        if (!sandbox || !list || !summary) return;
+
+        const elements = Array.from(sandbox.querySelectorAll('*'));
+        const rows = [];
+        const repairItems = [];
+        let total = 0;
+        let recognized = 0;
+
+        elements.forEach((element, index) => {
+            const info = getBindingInfo(element, index);
+            if (!info) return;
+
+            total++;
+            if (info.hasBinding) {
+                recognized++;
+            } else {
+                repairItems.push(buildRepairItem(info, element));
+            }
+
+            rows.push(
+                `<div class="binding-row ${info.hasBinding ? 'ok' : 'warn'} ${selectedBindingIndex === info.elementIndex ? 'selected' : ''}" data-binding-index="${info.elementIndex}">` +
+                `<div class="binding-dot ${info.hasBinding ? 'ok' : 'warn'}"></div>` +
+                `<div class="binding-main">` +
+                `<div class="binding-title">${escapeHtml(info.title)}</div>` +
+                `<div class="binding-meta">${escapeHtml(info.meta)}</div>` +
+                `<div class="binding-path">${escapeHtml(info.path || (info.hasBinding ? '已识别到图片资源' : '未发现可绑定的图片地址'))}</div>` +
+                `</div></div>`
+            );
+        });
+
+        summary.innerText = `Recognized: ${recognized} / ${total}`;
+        list.innerHTML = rows.length > 0
+            ? rows.join('')
+            : '<div class="binding-empty">当前没有检测到可预览的图片节点。</div>';
+
+        lastRepairList = {
+            generatedAt: new Date().toISOString(),
+            total: total,
+            recognized: recognized,
+            missingCount: repairItems.length,
+            items: repairItems
+        };
+
+        applyCurrentHighlight();
+    }
+
+    function getBindingInfo(element, index) {
+        const tag = element.tagName.toLowerCase();
+        const uType = element.getAttribute('data-u-type') || '';
+        const uName = element.getAttribute('data-u-name') || '';
+        const spriteInfo = extractSpriteInfo(element);
+        const hasBinding = !!(spriteInfo.spriteName || spriteInfo.spritePath);
+        const imageLike = tag === 'img' || hasBinding || isImageLikeElement(element) || uType === 'image';
+
+        if (!imageLike) {
+            return null;
+        }
+
+        const titleParts = [`${index + 1}. <${tag}>`];
+        if (uName) titleParts.push(`name=${uName}`);
+        if (uType) titleParts.push(`type=${uType}`);
+
+        const metaParts = [];
+        if (spriteInfo.spriteName) metaParts.push(`spriteName=${spriteInfo.spriteName}`);
+        if (spriteInfo.spritePath) metaParts.push(`spritePath=${spriteInfo.spritePath}`);
+        if (!spriteInfo.spriteName && !spriteInfo.spritePath) metaParts.push('未绑定图片地址');
+
+        return {
+            elementIndex: index,
+            title: titleParts.join(' | '),
+            meta: metaParts.join(' | '),
+            path: spriteInfo.spritePath,
+            hasBinding: hasBinding,
+            tag: tag,
+            uType: uType,
+            uName: uName,
+            spriteName: spriteInfo.spriteName,
+            spritePath: spriteInfo.spritePath
+        };
+    }
+
+    function buildRepairItem(info, element) {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return {
+            index: info.elementIndex,
+            tag: info.tag,
+            name: info.uName || info.spriteName || generateNodeNameFromElement(element, { spriteName: info.spriteName, spritePath: info.spritePath }),
+            type: info.uType || (info.tag === 'img' || isImageLikeElement(element) ? 'image' : 'div'),
+            spriteName: info.spriteName || "",
+            spritePath: info.spritePath || "",
+            x: Math.round(rect.left / currentScale),
+            y: Math.round(rect.top / currentScale),
+            width: Math.round(rect.width / currentScale),
+            height: Math.round(rect.height / currentScale),
+            text: (element.innerText || "").trim(),
+            backgroundColor: rgb2hex(style.backgroundColor),
+            fontColor: rgb2hex(style.color),
+            suggestion: info.spritePath ? "已绑定" : "补充 data-u-src / src / background-image"
+        };
+    }
+
+    function highlightBindingIndex(bindingIndex) {
+        const sandbox = document.getElementById('canvas-sandbox');
+        if (!sandbox) return;
+
+        selectedBindingIndex = bindingIndex;
+
+        const rows = document.querySelectorAll('.binding-row');
+        rows.forEach(row => row.classList.remove('selected'));
+
+        const row = document.querySelector(`.binding-row[data-binding-index="${bindingIndex}"]`);
+        if (row) {
+            row.classList.add('selected');
+            row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+
+        applyCurrentHighlight();
+    }
+
+    function clearElementHighlight(sandbox) {
+        const previous = sandbox.querySelectorAll('[data-binding-highlighted="true"]');
+        previous.forEach(el => {
+            el.style.outline = '';
+            el.style.outlineOffset = '';
+            el.style.boxShadow = '';
+            delete el.dataset.bindingHighlighted;
+        });
+    }
+
+    function applyCurrentHighlight() {
+        const sandbox = document.getElementById('canvas-sandbox');
+        if (!sandbox || selectedBindingIndex < 0) {
+            return;
+        }
+
+        const element = sandbox.querySelectorAll('*')[selectedBindingIndex];
+        if (!element) {
+            return;
+        }
+
+        clearElementHighlight(sandbox);
+        element.style.outline = '3px solid #9cdcfe';
+        element.style.outlineOffset = '-2px';
+        element.style.boxShadow = '0 0 0 2px rgba(156, 220, 254, 0.25)';
+        element.dataset.bindingHighlighted = 'true';
+    }
+
+    function exportRepairList() {
+        if (!lastRepairList) {
+            updateBindingPreview();
+        }
+
+        if (!lastRepairList || !lastRepairList.items) {
+            alert('当前没有可导出的修复清单。');
+            return;
+        }
+
+        const json = JSON.stringify(lastRepairList, null, 2);
+        const output = document.getElementById('json-output');
+        if (output) {
+            output.value = json;
+        }
+
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'ui-image-repair-list.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 </script>
 </body>

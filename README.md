@@ -1,72 +1,184 @@
-# HTML to UGUI Baker
+# HtmlToUGUI 工具说明
 
-这是一套将 AI 生成的 HTML 原型直接转换为 Unity UGUI 界面树的自动化生产管线。通过自定义的 HTML 数据属性规范（UI-DSL），结合 Web 坐标提取工具和 Unity 编辑器扩展，实现从“自然语言对话”到“生产级 UGUI 预制体”的无缝流转。
+这套工具全部放在 `Assets/HtmlToUGUI` 目录下，用于把 UI 原型 HTML / 效果图识别结果转换成 Unity UGUI 可烘焙的数据。
 
-演示视频：https://www.bilibili.com/video/BV17BcXzwEer
+## 目录结构
 
-![PixPin_2026-03-17_11-08-43](https://github.com/user-attachments/assets/28385bc6-41b3-43f5-a539-b99d62097bec)
-<img width="806" height="587" alt="image" src="https://github.com/user-attachments/assets/63de9574-8395-4fc1-808e-00256d48cdf1" />
+- `Assets/HtmlToUGUI/Editor/`
+  - `HtmlToUGUIBaker.cs`
+  - `EffectImageToHtmlMultiWindow.cs`
+  - `EffectImageToHtmlWindow.cs`
+- `Assets/HtmlToUGUI/HtmlToJson/`
+  - `HTML 转 JSON 坐标烘焙器.html`
+- `Assets/HtmlToUGUI/DSL/`
+  - `UI 原型 HTML 生成规范 (UI-DSL) - 全控件版.md`
+- `Assets/HtmlToUGUI/UIjson/`
+  - 示例 JSON
+- `Assets/HtmlToUGUI/HTML/`
+  - 示例 HTML
+- `Assets/HtmlToUGUI/.env`
+  - 本地密钥配置文件
 
-## 🚀 v2.0 全新特性 (最新更新)
+## 主要入口
 
-*   **多分辨率预设与动态适配**：引入 `HtmlToUGUIConfig` (ScriptableObject) 全局配置，支持在编辑器内自由增删分辨率预设（如 PC 横屏 1920x1080、Mobile 竖屏 1080x1920）。烘焙时会自动配置目标 Canvas 的 `CanvasScaler`。
-*   **动态 DSL 规范导出**：无需手动修改 AI 提示词，在编辑器中选择目标分辨率后，点击“复制 DSL 规范”，系统会自动替换模板中的 `{WIDTH}` 和 `{HEIGHT}` 占位符并写入剪贴板。
-*   **极速剪贴板直通流**：彻底告别繁琐的文件保存与拖拽！Web 工具支持“一键烘焙并复制 JSON”，Unity 端支持“直接粘贴 JSON 字符”模式，实现跨软件的秒级流转。
-*   **Web 烘焙器全面升级**：新增自适应屏幕的等比缩放预览功能，彻底修复了 CSS 动画导致的坐标偏移问题，确保 1:1 完美还原绝对坐标与尺寸。
-*   **外部工具链桥接**：在 Unity 烘焙窗口内可直接配置本地 HTML 工具的路径，一键在浏览器中唤起工作流。
+### 1. 效果图识别 -> HTML
 
----
+Unity 菜单：
 
-## 核心特性
+- `Tools -> UI Architecture -> 效果图识别 -> HTML (多平台)`
 
-*   **全控件拓扑支持**：不仅支持基础排版，还在 Unity 端硬编码了 `Toggle`、`Slider`、`Dropdown`、`ScrollRect` 等复杂控件的标准 UGUI 嵌套层级，保证生成的节点结构与原生右键创建的绝对一致。
-*   **所见即所得**：精准提取 HTML 的绝对坐标、尺寸、背景色、字体颜色、字体大小以及文本对齐方式（Left/Right/Center）。
-*   **代码级规范**：强制采用小驼峰命名法（camelCase），生成的 UI 节点名称可直接用于 C# View 层的变量绑定（如 `loginBtn`）。
-*   **零依赖**：Unity 端纯 C# 原生 Editor 扩展，基于 TextMeshPro 构建，无需引入任何第三方 UI 插件。
+功能：
 
----
+- 选择一张 UI 效果图
+- 选择一个图片资源文件夹
+- 通过 OpenAI / Gemini / 豆包 / 自定义兼容接口生成符合 UI-DSL 的 HTML
+- 支持从 `.env` 自动读取多个 Key
+- 支持根据 Key 自动切换平台预设
 
-## 标准工作流与使用指南 (v2.0)
+### 2. HTML -> JSON 坐标烘焙器
 
-整个管线分为三个标准步骤：**导出规范 -> AI 生成 -> 剪贴板烘焙**。
+文件位置：
 
-### 准备工作 (仅首次需要)
-1. 在 Unity 中右键 `Project` 窗口 -> `Create -> UI Architecture -> HtmlToUGUI Config` 创建配置文件。
-2. 将提供的 `UI-DSL.md` 模板文件拖入该配置的对应槽位中。
-3. 在顶部菜单栏打开 `Tools -> UI Architecture -> HTML to UGUI Baker`。
+- `Assets/HtmlToUGUI/HtmlToJson/HTML 转 JSON 坐标烘焙器.html`
 
-### Step 1: 导出规范与 AI 生成
-1. 在 Unity 的烘焙窗口中，选择你的**目标分辨率**（如 Mobile 竖屏）。
-2. 点击 **“复制对应分辨率的 DSL 规范文档”**。
-3. 将剪贴板中的内容发送给任意大语言模型（如 ChatGPT, Claude, Gemini），并附加你的自然语言需求（例如：“*帮我写一个系统设置界面，包含音量滑动条、全屏开关和画质下拉菜单*”）。
-4. 复制 AI 生成的 HTML 代码。
+功能：
 
-### Step 2: Web 端一键提取坐标
-1. 在 Unity 烘焙窗口中点击 **“在浏览器中打开”**（需提前配置好 HTML 工具的本地路径）。
-2. 将 AI 生成的 HTML 代码粘贴到左侧输入框中，右侧将实时渲染自适应预览。
-3. 点击右上角的 **“🚀 一键烘焙并复制 JSON”**，工具会在后台完成坐标换算并将 JSON 数据直接写入你的系统剪贴板。
+- 将 HTML 原型解析成 JSON 坐标数据
+- 识别 `img`
+- 识别 `data-u-src`
+- 识别 `data-u-sprite`
+- 识别 `background-image`
+- 提供图片绑定预览
+- 支持点击未绑定项并高亮对应节点
+- 支持导出未绑定图片的修复清单
 
-### Step 3: Unity 端极速生成
-1. 回到 Unity 的 HTML to UGUI Baker 窗口。
-2. 拖入场景中的目标 **Canvas**。
-3. 将输入模式切换为 **“直接粘贴 JSON 字符”**，并将刚才复制的 JSON 粘贴到文本框中。
-4. 点击 **“执行烘焙生成”**。
-5. 完成！你的 Canvas 下会自动生成完整的 UI 节点树，所有控件均已配置完毕且可直接运行。
+### 3. Unity 烘焙器
 
----
+Unity 菜单：
 
-## 控件映射支持列表
+- `Tools -> UI Architecture -> HTML to UGUI Baker (Full Controls)`
 
-| HTML 标签声明 | Unity UGUI 对应组件 | 支持的高级属性 |
-| :--- | :--- | :--- |
-| `data-u-type="div"` | Image (Raycast 自动剔除) | 尺寸、坐标、背景色 |
-| `data-u-type="image"` | Image | 尺寸、坐标、背景色 |
-| `data-u-type="text"` | TextMeshProUGUI | 字体大小、颜色、对齐方式 |
-| `data-u-type="button"` | Button + Image + TMP | 交互组件、内部文本样式 |
-| `data-u-type="input"` | TMP_InputField | 占位符文本、输入文本样式 |
-| `data-u-type="scroll"`| ScrollRect + Mask | 滚动方向 (`data-u-dir="v/h"`) |
-| `data-u-type="toggle"`| Toggle + Image + TMP | 默认开关状态 (`data-u-checked`) |
-| `data-u-type="slider"`| Slider + Image | 默认进度值 (`data-u-value`) |
-| `data-u-type="dropdown"`| TMP_Dropdown + ScrollRect | 内部 `<option>` 选项列表解析 |
+功能：
 
-基于这个功能我增加了ai识图 并且绑定图片
+- 粘贴或读取 JSON 数据源
+- 烘焙为 Unity 预制体
+- 根据图片资源文件夹自动绑定 `Sprite`
+- 烘焙前预检
+- 预检结果按以下分类显示：
+  - `命中图片`
+  - `缺少文件`
+  - `名字不一致`
+  - `没转 Sprite`
+
+## 推荐使用流程
+
+### 流程 A：效果图 -> HTML -> JSON -> Unity
+
+1. 打开 `效果图识别 -> HTML (多平台)`。
+2. 选择一张效果图。
+3. 选择一个图片资源文件夹。
+4. 选择平台预设，或者从 `.env` 自动切换平台。
+5. 点击 `生成 HTML`。
+6. 将生成结果粘贴到 `HTML 转 JSON 坐标烘焙器.html`。
+7. 点击烘焙并复制 JSON。
+8. 在 Unity 的 `HTML to UGUI Baker` 中粘贴 JSON 并执行烘焙。
+
+### 流程 B：直接使用现成 HTML
+
+1. 在 `HTML 转 JSON 坐标烘焙器.html` 中粘贴已有 HTML。
+2. 点击烘焙并复制 JSON。
+3. 在 Unity 中进行烘焙。
+
+## 平台预设
+
+当前多平台识别窗口支持以下预设：
+
+- `OpenAI`
+- `Gemini`
+- `豆包`
+- `Custom`
+
+切换预设时会自动填充对应的模型名和接口地址。
+
+## `.env` 说明
+
+你可以在 `Assets/HtmlToUGUI/.env` 中放置多个 Key，例如：
+
+```env
+OPENAI_API_KEY=sk-xxxxxxxx
+GEMINI_API_KEY=AIzaxxxxxxxx
+DOUBAO_API_KEY=xxxxxxxx
+```
+
+窗口里可以：
+
+- 读取 `.env`
+- 从下拉框选择某个 Key 变量
+- 按当前 Key 自动识别平台
+
+注意：
+
+- Key 建议不要提交到仓库
+- 真实密钥如果泄露过，建议及时轮换
+
+## 图片资源绑定规则
+
+Unity 烘焙器会优先使用你指定的图片文件夹进行匹配，不会默认扫描整个项目。
+
+匹配顺序大致是：
+
+1. `spriteName`
+2. `spritePath`
+3. 节点名 `name`
+4. 名称归一化匹配
+5. 文件夹内 Sprite 索引
+
+如果图片没有成功绑定，请优先检查：
+
+- 图片是否放在你选中的资源文件夹里
+- 图片导入类型是否已经是 `Sprite`
+- 文件名是否和 JSON 中的 `spriteName` 对得上
+- 是否只是带了透明度 tint，导致看起来像没显示
+
+## 常见问题
+
+### 1. 生成时报 `Quota exhausted`
+
+说明当前账号或项目额度不足，需要检查：
+
+- Billing
+- Usage Limits
+- Project Budget
+
+### 2. 生成时报 `API Key 无效或格式不正确`
+
+通常是以下原因之一：
+
+- 选错平台了
+- Key 不是这个平台的格式
+- `.env` 里多了引号或空格
+
+### 3. 生成出来的图片是透明的
+
+如果 `data-u-type="image"` 节点原始颜色带了透明通道，烘焙时会被视为 tint。  
+当前实现已经对成功绑定 Sprite 的图片节点做了默认白色修正，避免 Sprite 被意外乘成透明。
+
+### 4. 预检里只有一部分图片命中
+
+看预检分类：
+
+- `缺少文件`：目录里没有对应文件
+- `名字不一致`：有图，但名字没对上
+- `没转 Sprite`：文件存在，但不是 Sprite 导入
+
+## 代码位置
+
+当前相关代码都在 `Assets/HtmlToUGUI` 路径下：
+
+- `Assets/HtmlToUGUI/Editor/HtmlToUGUIBaker.cs`
+- `Assets/HtmlToUGUI/Editor/EffectImageToHtmlMultiWindow.cs`
+- `Assets/HtmlToUGUI/Editor/EffectImageToHtmlWindow.cs`
+- `Assets/HtmlToUGUI/HtmlToJson/HTML 转 JSON 坐标烘焙器.html`
+- `Assets/HtmlToUGUI/DSL/UI 原型 HTML 生成规范 (UI-DSL) - 全控件版.md`
+
+如果你后续要继续扩展功能，建议也统一放到这个目录下，保持工具入口和资源说明集中管理。
