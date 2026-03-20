@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
@@ -312,6 +313,7 @@ namespace Editor.UIBaker
             {
                 generatedHtml = CallOpenAI();
                 generatedHtml = ExtractHtml(generatedHtml);
+                generatedHtml = NormalizeRootCanvasSize(generatedHtml);
                 SetStatus("生成成功。", MessageType.Info);
                 Repaint();
             }
@@ -411,7 +413,7 @@ namespace Editor.UIBaker
             sb.AppendLine("请根据这张 UI 效果图生成 HTML 原型代码，要求严格遵守以下规范：");
             sb.AppendLine("1. 只能输出 HTML，不要 Markdown，不要解释。");
             sb.AppendLine("2. 必须只有一个根节点，data-u-type=\"div\"，data-u-name=\"root\" 或窗口名。");
-            sb.AppendLine("3. 根节点 style 必须明确写 width: 2048px; height: 1536px;。");
+            sb.AppendLine("3. 根节点 style 必须与目标分辨率一致，不要擅自改尺寸。");
             sb.AppendLine("4. 节点 data-u-name 必须使用小驼峰命名法。");
             sb.AppendLine("5. 允许的 data-u-type 仅有 div, image, text, button, input, scroll, toggle, slider, dropdown。");
             sb.AppendLine("6. dropdown 必须使用 select/option。");
@@ -499,6 +501,90 @@ namespace Editor.UIBaker
             }
 
             return text.Trim().Trim('`');
+        }
+
+        private string NormalizeRootCanvasSize(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html))
+            {
+                return html;
+            }
+
+            if (!TryGetTargetResolution(out int targetWidth, out int targetHeight))
+            {
+                return html;
+            }
+
+            Match match = Regex.Match(
+                html,
+                @"<(?<tag>div|section|main|article|body)\b[^>]*data-u-type\s*=\s*""div""[^>]*style\s*=\s*""(?<style>[^""]*)""",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            if (!match.Success)
+            {
+                return html;
+            }
+
+            string style = match.Groups["style"].Value;
+            style = Regex.Replace(style, @"width\s*:\s*[^;]+;?", $"width: {targetWidth}px;", RegexOptions.IgnoreCase);
+            style = Regex.Replace(style, @"height\s*:\s*[^;]+;?", $"height: {targetHeight}px;", RegexOptions.IgnoreCase);
+
+            if (!Regex.IsMatch(style, @"\bwidth\s*:", RegexOptions.IgnoreCase))
+            {
+                style = $"width: {targetWidth}px; " + style;
+            }
+
+            if (!Regex.IsMatch(style, @"\bheight\s*:", RegexOptions.IgnoreCase))
+            {
+                style = $"height: {targetHeight}px; " + style;
+            }
+
+            string updatedTag = match.Value.Replace(match.Groups["style"].Value, style);
+            return html.Substring(0, match.Index) + updatedTag + html.Substring(match.Index + match.Length);
+        }
+
+        private bool TryGetTargetResolution(out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            return TryParseResolution(systemHint, out width, out height);
+        }
+
+        private static bool TryParseResolution(string text, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            Match named = Regex.Match(
+                text,
+                @"(?:目标分辨率|分辨率|resolution)[^\d]*(\d{3,5})\s*(?:x|X|×|\s)\s*(\d{3,5})",
+                RegexOptions.IgnoreCase);
+            if (named.Success && int.TryParse(named.Groups[1].Value, out width) && int.TryParse(named.Groups[2].Value, out height))
+            {
+                return true;
+            }
+
+            Match explicitStyle = Regex.Match(
+                text,
+                @"width\s*[:=]?\s*(\d{3,5})\s*px?[^\d]+height\s*[:=]?\s*(\d{3,5})\s*px?",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (explicitStyle.Success && int.TryParse(explicitStyle.Groups[1].Value, out width) && int.TryParse(explicitStyle.Groups[2].Value, out height))
+            {
+                return true;
+            }
+
+            Match generic = Regex.Match(text, @"\b(\d{3,5})\s*(?:x|X|×|\s)\s*(\d{3,5})\b");
+            if (generic.Success && int.TryParse(generic.Groups[1].Value, out width) && int.TryParse(generic.Groups[2].Value, out height))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private static string GuessMimeType(string path)

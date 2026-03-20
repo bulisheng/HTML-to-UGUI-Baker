@@ -43,6 +43,8 @@ namespace Editor.UIBaker
         private const string PREFS_CONFIG_PATH_KEY = "HtmlToUGUIBaker_ConfigPath";
         private const string PREFS_RES_INDEX_KEY = "HtmlToUGUIBaker_ResIndex";
         private const string PREFS_SPRITE_FOLDER_KEY = "HtmlToUGUIBaker_SpriteFolderPath";
+        private const string UI_JSON_OUTPUT_FOLDER = "Assets/HtmlToUGUI/UIjson";
+        private const string UI_JSON_OUTPUT_FILE = "CurrentUI.uijson.txt";
 
         private InputMode currentMode = InputMode.FileAsset;
         private TextAsset jsonAsset;
@@ -107,7 +109,16 @@ namespace Editor.UIBaker
 
         private void OnGUI()
         {
+            GUILayout.BeginHorizontal();
             GUILayout.Label("基于坐标烘焙的 UI 原型生成工具 (支持多分辨率与全控件)", EditorStyles.boldLabel);
+            GUILayout.FlexibleSpace();
+            GUI.backgroundColor = new Color(0.2f, 0.8f, 0.2f);
+            if (GUILayout.Button("执行烘焙生成", GUILayout.Width(120), GUILayout.Height(28)))
+            {
+                ExecuteBake();
+            }
+            GUI.backgroundColor = Color.white;
+            GUILayout.EndHorizontal();
             GUILayout.Space(10);
 
             DrawConfigUI();
@@ -136,19 +147,6 @@ namespace Editor.UIBaker
 
             GUILayout.Space(20);
             DrawSpritePrecheckUI();
-            GUILayout.Space(10);
-            if (GUILayout.Button("烘焙前预检", GUILayout.Height(36)))
-            {
-                RunSpritePrecheck();
-            }
-
-            GUI.backgroundColor = new Color(0.2f, 0.8f, 0.2f);
-            if (GUILayout.Button("执行烘焙生成", GUILayout.Height(40)))
-            {
-                ExecuteBake();
-            }
-
-            GUI.backgroundColor = Color.white;
         }
 
         private void DrawConfigUI()
@@ -297,26 +295,6 @@ namespace Editor.UIBaker
             }
             GUILayout.EndHorizontal();
 
-            if (GUILayout.Button("浏览文件夹...", GUILayout.Height(24)))
-            {
-                string absolutePath = EditorUtility.OpenFolderPanel("选择图片资源文件夹", Application.dataPath, "");
-                if (!string.IsNullOrEmpty(absolutePath))
-                {
-                    string projectPath = AbsolutePathToProjectPath(absolutePath);
-                    if (!string.IsNullOrEmpty(projectPath))
-                    {
-                        spriteFolderPath = projectPath;
-                        spriteFolderAsset = AssetDatabase.LoadAssetAtPath<DefaultAsset>(projectPath);
-                        EditorPrefs.SetString(PREFS_SPRITE_FOLDER_KEY, spriteFolderPath);
-                        RebuildSpriteIndex();
-                    }
-                    else
-                    {
-                        Debug.LogWarning("[HtmlToUGUIBaker] 请选择 Assets 目录内的文件夹，这样才能被 Unity 资源系统识别。");
-                    }
-                }
-            }
-
             if (!string.IsNullOrEmpty(spriteFolderPath))
             {
                 EditorGUILayout.LabelField("当前路径", spriteFolderPath);
@@ -336,8 +314,8 @@ namespace Editor.UIBaker
         private void DrawStringModeUI()
         {
             GUILayout.Label("在此粘贴 JSON 文本:", EditorStyles.label);
-            scrollPosition = GUILayout.BeginScrollView(scrollPosition, GUILayout.Height(200));
-            rawJsonString = EditorGUILayout.TextArea(rawJsonString, GUILayout.ExpandHeight(true));
+            scrollPosition = GUILayout.BeginScrollView(scrollPosition, GUILayout.Height(140));
+            rawJsonString = EditorGUILayout.TextArea(rawJsonString, GUILayout.Height(120));
             GUILayout.EndScrollView();
             GUILayout.Space(5);
 
@@ -369,45 +347,123 @@ namespace Editor.UIBaker
 
         private void SaveRawJsonToProject()
         {
-            if (string.IsNullOrWhiteSpace(rawJsonString))
+            if (TryGetJsonContentForPrecheck(out string jsonContent, out string error))
             {
-                Debug.LogError("[HtmlToUGUIBaker] 保存失败: 当前 JSON 字符串为空，请先粘贴数据。");
-                return;
+                SaveJsonContentToFixedFolder(jsonContent, true);
+            }
+            else
+            {
+                Debug.LogError($"[HtmlToUGUIBaker] 保存失败: {error}");
+            }
+        }
+
+        private bool SaveJsonContentToFixedFolder(string jsonContent, bool updateSelection)
+        {
+            if (string.IsNullOrWhiteSpace(jsonContent))
+            {
+                Debug.LogError("[HtmlToUGUIBaker] 保存失败: JSON 内容为空。");
+                return false;
             }
 
-            string savePath = EditorUtility.SaveFilePanelInProject(
-                "保存 UI 数据",
-                "NewUIWindow.uijson.txt",
-                "txt",
-                "请选择要保存的目录，建议使用 .txt 或 .uijson，避免被 Spine 等插件误判"
-            );
+            EnsureFolderExists("Assets/HtmlToUGUI", "UIjson");
 
-            if (string.IsNullOrEmpty(savePath))
+            if (!AssetDatabase.IsValidFolder(UI_JSON_OUTPUT_FOLDER))
             {
-                return;
+                Debug.LogError($"[HtmlToUGUIBaker] 保存失败: 无法访问目录 {UI_JSON_OUTPUT_FOLDER}");
+                return false;
             }
 
-            if (savePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-            {
-                savePath = Path.ChangeExtension(savePath, ".uijson.txt");
-            }
-
+            string fileName = BuildJsonSaveFileName();
+            string savePath = $"{UI_JSON_OUTPUT_FOLDER}/{fileName}";
             try
             {
-                File.WriteAllText(savePath, rawJsonString);
+                File.WriteAllText(savePath, jsonContent);
                 AssetDatabase.Refresh();
-                TextAsset savedAsset = AssetDatabase.LoadAssetAtPath<TextAsset>(savePath);
-                if (savedAsset != null)
+
+                if (updateSelection)
                 {
-                    jsonAsset = savedAsset;
-                    currentMode = InputMode.FileAsset;
-                    Debug.Log($"[HtmlToUGUIBaker] JSON 文件已成功保存至: {savePath}，并已自动切换至文件模式。");
+                    TextAsset savedAsset = AssetDatabase.LoadAssetAtPath<TextAsset>(savePath);
+                    if (savedAsset != null)
+                    {
+                        jsonAsset = savedAsset;
+                        currentMode = InputMode.FileAsset;
+                    }
                 }
+
+                Debug.Log($"[HtmlToUGUIBaker] JSON 已保存到: {savePath}");
+                return true;
             }
             catch (Exception e)
             {
-                Debug.LogError($"[HtmlToUGUIBaker] 文件写入失败: 路径 {savePath}，错误信息: {e.Message}");
+                Debug.LogError($"[HtmlToUGUIBaker] 保存 JSON 失败: {savePath}, {e.Message}");
+                return false;
             }
+        }
+
+        private string BuildJsonSaveFileName()
+        {
+            string baseName = string.Empty;
+
+            if (currentMode == InputMode.FileAsset && jsonAsset != null)
+            {
+                baseName = Path.GetFileNameWithoutExtension(AssetDatabase.GetAssetPath(jsonAsset));
+            }
+            else if (!string.IsNullOrWhiteSpace(rawJsonString))
+            {
+                baseName = "UIJson";
+            }
+
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                baseName = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            }
+            else
+            {
+                baseName = SanitizeFileName(baseName);
+                baseName = $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}";
+            }
+
+            return $"{baseName}.uijson.txt";
+        }
+
+        private static string SanitizeFileName(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return "UIJson";
+            }
+
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            var sb = new System.Text.StringBuilder(fileName.Length);
+            foreach (char c in fileName)
+            {
+                if (Array.IndexOf(invalidChars, c) >= 0)
+                {
+                    sb.Append('_');
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        private static void EnsureFolderExists(string parentFolder, string childFolder)
+        {
+            string targetFolder = $"{parentFolder}/{childFolder}";
+            if (AssetDatabase.IsValidFolder(targetFolder))
+            {
+                return;
+            }
+
+            if (!AssetDatabase.IsValidFolder(parentFolder))
+            {
+                return;
+            }
+
+            AssetDatabase.CreateFolder(parentFolder, childFolder);
         }
 
         #if false
@@ -624,7 +680,14 @@ namespace Editor.UIBaker
         private void DrawSpritePrecheckUI()
         {
             GUILayout.BeginVertical("box");
-            EditorGUILayout.LabelField("Precheck", EditorStyles.boldLabel);
+            GUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("烘焙前预检", EditorStyles.boldLabel);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("运行预检", GUILayout.Width(100)))
+            {
+                RunSpritePrecheck();
+            }
+            GUILayout.EndHorizontal();
             EditorGUILayout.HelpBox(string.IsNullOrEmpty(precheckSummary) ? "Precheck has not run yet." : precheckSummary, MessageType.Info);
 
             precheckScroll = EditorGUILayout.BeginScrollView(precheckScroll, GUILayout.Height(180));
@@ -1191,6 +1254,11 @@ namespace Editor.UIBaker
                     return;
                 }
                 jsonContent = rawJsonString;
+            }
+
+            if (!SaveJsonContentToFixedFolder(jsonContent, false))
+            {
+                return;
             }
 
             jsonContent = NormalizeJsonContent(jsonContent);
