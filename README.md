@@ -68,3 +68,5 @@
 | `data-u-type="toggle"`| Toggle + Image + TMP | 默认开关状态 (`data-u-checked`) |
 | `data-u-type="slider"`| Slider + Image | 默认进度值 (`data-u-value`) |
 | `data-u-type="dropdown"`| TMP_Dropdown + ScrollRect | 内部 `<option>` 选项列表解析 |
+
+基于这个功能我增加了ai识图 并且绑定图片
